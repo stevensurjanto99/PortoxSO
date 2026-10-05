@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<title>Porto X - Scan SO</title>
+<style>
+:root{--ink:#111;--mute:#6b6b6b;--line:#d9d9d9;--bg:#fff;--card:#f4f4f2;--ok:#0f7b3f;--okbg:#e3f4ea;--bad:#b3261e;--badbg:#fbe7e5;--warn:#8a5a00;--warnbg:#fff1d6}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.4 "Barlow",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--bg);padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+main{max-width:560px;margin:0 auto;padding:16px}
+h1{font-size:28px;margin:8px 0 4px;letter-spacing:-.01em}
+.sub{color:var(--mute);margin:0 0 24px}
+label{display:block;font-weight:600;margin:16px 0 6px}
+select,input{width:100%;font:inherit;padding:14px;border:2px solid var(--ink);border-radius:6px;background:#fff;color:var(--ink)}
+button{font:inherit;font-weight:600;padding:14px 18px;border:2px solid var(--ink);border-radius:6px;background:#fff;color:var(--ink);cursor:pointer}
+button.main{background:var(--ink);color:#fff;width:100%;margin-top:24px;padding:16px}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #2b6cff;outline-offset:2px}
+button:disabled{opacity:.5}
+.err{color:var(--bad);font-weight:600;min-height:24px;margin-top:12px}
+.bar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px}
+.bar b{font-size:18px}
+.pill{font-size:14px;font-weight:600;padding:4px 10px;border-radius:99px;background:var(--okbg);color:var(--ok)}
+.pill.off{background:var(--warnbg);color:var(--warn)}
+.pill.fail{background:var(--badbg);color:var(--bad)}
+#video{width:100%;max-height:36vh;object-fit:cover;border-radius:6px;background:#000;margin-bottom:12px}
+.tools{display:flex;gap:8px;margin-bottom:12px}
+.tools input{flex:1}
+#last{border-radius:8px;padding:16px;background:var(--card);min-height:140px;border-left:10px solid var(--line)}
+#last.ok{background:var(--okbg);border-color:var(--ok)}
+#last.bad{background:var(--badbg);border-color:var(--bad)}
+#last .name{font-size:24px;font-weight:700;line-height:1.15}
+#last .meta{color:var(--mute);margin-top:4px;word-break:break-all}
+#last .qty{font-size:56px;font-weight:800;line-height:1;margin-top:8px}
+#last .qty small{font-size:18px;font-weight:600;margin-left:6px}
+.count{display:flex;gap:16px;margin:16px 0 8px;font-weight:600}
+.count span{color:var(--mute);font-weight:400}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+li .t{min-width:0}li .t div:first-child{font-weight:600}
+li .t div:last-child{font-size:14px;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+li button{padding:6px 10px;font-size:14px}
+li.bad .t div:first-child{color:var(--bad)}
+.out{margin-top:20px;width:100%;border-color:var(--line);color:var(--mute)}
+@media (prefers-reduced-motion:no-preference){#last{transition:background .15s}}
+</style>
+</head>
+<body>
+
+<main id="login">
+  <h1>Stok Opname</h1>
+  <p class="sub">Pilih nama dan masukkan Kode SO dari admin.</p>
+  <label for="nama">Nama</label>
+  <select id="nama"><option value="">Memuat daftar nama...</option></select>
+  <label for="kode">Kode SO</label>
+  <input id="kode" autocomplete="off" autocapitalize="characters" placeholder="Contoh: SO-PAKUWON1">
+  <button class="main" id="start">Start SO</button>
+  <div class="err" id="loginErr"></div>
+</main>
+
+<main id="scan" hidden>
+  <div class="bar"><b id="hdr"></b><span class="pill" id="net">Online</span></div>
+  <video id="video" playsinline muted hidden></video>
+  <div class="tools">
+    <input id="inp" inputmode="none" autocomplete="off" placeholder="Arahkan scanner ke sini">
+    <button id="kb" title="Ketik manual" aria-label="Ketik manual">Ketik</button>
+    <button id="cam" hidden>Kamera</button>
+  </div>
+  <div id="last"><div class="name">Siap scan</div><div class="meta">Scan barcode dus master atau satuan.</div></div>
+  <div class="count"><div><span>Scan </span><b id="cN">0</b></div><div><span>Total pairs </span><b id="cP">0</b></div></div>
+  <ul id="recent"></ul>
+  <div class="err" id="scanErr"></div>
+  <button class="out" id="exit">Selesai dan keluar</button>
+</main>
+
+<script>
+/* === ISI SATU KALI: URL Web App dari Apps Script (Deploy > Manage deployments) === */
+const API = 'https://script.google.com/macros/s/AKfycbzJdX39VXa1AgpQs5_R3q0RnpydSHRpm17IcwU4HRWMW_fjfBR2PuULdVwhOysbJS_7NA/exec';
+
+const $ = id => document.getElementById(id);
+let S = JSON.parse(localStorage.getItem('so') || 'null');   // sesi aktif + antrean offline
+const save = () => localStorage.setItem('so', JSON.stringify(S));
+
+async function api(body) {
+  const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+  return r.json();
+}
+
+/* ---------- Login ---------- */
+function fillNames(list) {
+  const cur = $('nama').value;
+  $('nama').innerHTML = '<option value="">Pilih nama</option>' + list.map(n => `<option>${n}</option>`).join('');
+  if (list.includes(cur)) $('nama').value = cur;
+}
+async function loadNames() {
+  fillNames(JSON.parse(localStorage.getItem('ops') || '[]'));
+  try { const r = await api({ action: 'init' }); if (r.ok) { localStorage.setItem('ops', JSON.stringify(r.operators)); fillNames(r.operators); } } catch (e) {}
+}
+$('start').onclick = async () => {
+  const nama = $('nama').value, kode = $('kode').value.trim();
+  $('loginErr').textContent = '';
+  if (!nama || !kode) return $('loginErr').textContent = 'Pilih nama dan isi Kode SO.';
+  $('start').disabled = true;
+  try {
+    const r = await api({ action: 'start', nama, kode });
+    if (!r.ok) $('loginErr').textContent = r.error;
+    else { S = { nama, kode, pic: r.pic, map: r.map, recent: [], queue: [], noteQ: [], n: 0, pairs: 0 }; save(); showScan(); }
+  } catch (e) { $('loginErr').textContent = 'Tidak ada sinyal. Start SO butuh internet satu kali.'; }
+  $('start').disabled = false;
+};
+
+/* ---------- Scan ---------- */
+function showScan() {
+  $('login').hidden = true; $('scan').hidden = false;
+  $('hdr').textContent = `${S.kode} - ${S.nama}`;
+  render(); $('inp').focus(); sync();
+}
+let audio;
+function beep(ok) {
+  navigator.vibrate && navigator.vibrate(ok ? 40 : [120, 60, 120]);
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    [ok ? [880, 0] : [260, 0], ...(ok ? [] : [[260, .22]])].forEach(([f, d]) => {
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.frequency.value = f; g.gain.value = .15; o.connect(g); g.connect(audio.destination);
+      o.start(audio.currentTime + d); o.stop(audio.currentTime + d + .15);
+    });
+  } catch (e) {}
+}
+function onCode(raw) {
+  const code = String(raw).trim();
+  if (!code || !S) return;
+  const m = S.map[code];
+  const id = S.nama + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const qty = m ? m[3] : 1;
+  S.queue.push({ id, t: new Date().toISOString(), code, note: '' });
+  S.recent.unshift({ id, code, sku: m ? m[0] : 'TIDAK DIKENAL', nama: m ? m[1] : code, size: m ? m[2] : '', qty, jenis: m ? m[4] : 'Tidak Dikenal', note: '', sent: false });
+  S.recent = S.recent.slice(0, 15);
+  S.n++; S.pairs += qty;
+  save(); beep(!!m); render(); sync();
+}
+function addNote(id) {
+  const it = S.recent.find(x => x.id === id);
+  const note = prompt('Catatan untuk scan ini (admin akan menyesuaikan qty):', it.note || '');
+  if (note === null) return;
+  it.note = note.trim();
+  const q = S.queue.find(x => x.id === id);
+  if (q) q.note = it.note; else S.noteQ.push({ id, note: it.note });
+  save(); render(); sync();
+}
+function render() {
+  if (!S) return;
+  const r = S.recent[0], el = $('last');
+  if (r) {
+    el.className = r.jenis === 'Tidak Dikenal' ? 'bad' : 'ok';
+    el.innerHTML = r.jenis === 'Tidak Dikenal'
+      ? `<div class="name">Barcode tidak dikenal</div><div class="meta">${r.code}<br>Tetap dicatat untuk dicek admin.</div><div class="qty">+${r.qty}<small>pairs</small></div>`
+      : `<div class="name">${r.nama} ${r.size}</div><div class="meta">${r.sku}</div><div class="qty">+${r.qty}<small>pairs (${r.jenis})</small></div>`;
+  }
+  $('cN').textContent = S.n; $('cP').textContent = S.pairs;
+  $('recent').innerHTML = S.recent.map(x => `<li class="${x.jenis === 'Tidak Dikenal' ? 'bad' : ''}"><div class="t"><div>${x.jenis === 'Tidak Dikenal' ? 'Tidak dikenal' : x.nama + ' ' + x.size} +${x.qty}</div><div>${x.note ? 'Catatan: ' + x.note : x.code}${x.sent ? '' : ' (belum terkirim)'}</div></div><button data-id="${x.id}">Catatan</button></li>`).join('');
+  const p = S.queue.length + S.noteQ.length, net = $('net');
+  net.className = 'pill' + (S.err ? ' fail' : p ? ' off' : '');
+  net.textContent = S.err ? S.err : p ? `${p} belum terkirim` : 'Tersimpan semua';
+}
+$('recent').onclick = e => { if (e.target.dataset.id) { addNote(e.target.dataset.id); $('inp').focus(); } };
+
+/* ---------- Kirim ke spreadsheet (antrean offline) ---------- */
+let syncing = false;
+async function sync() {
+  if (syncing || !S || (!S.queue.length && !S.noteQ.length)) return;
+  syncing = true;
+  try {
+    const batch = S.queue.slice(0, 50);
+    if (batch.length) {
+      const r = await api({ action: 'scan', nama: S.nama, kode: S.kode, scans: batch });
+      if (!r.ok) { S.err = r.error; throw 0; }
+      const done = new Set(batch.map(b => b.id));
+      S.queue = S.queue.filter(q => !done.has(q.id));
+      S.recent.forEach(x => { if (done.has(x.id)) x.sent = true; });
+    }
+    for (const n of S.noteQ.slice()) {
+      const r = await api({ action: 'note', kode: S.kode, id: n.id, note: n.note });
+      if (r.ok) S.noteQ = S.noteQ.filter(x => x !== n);
+    }
+    S.err = '';
+  } catch (e) { if (!S.err && navigator.onLine === false) S.err = ''; }
+  syncing = false; save(); render();
+  if (S.queue.length && !S.err) setTimeout(sync, 200);
+}
+setInterval(sync, 5000);
+addEventListener('online', sync);
+
+/* ---------- Input scanner USB / ketik ---------- */
+$('inp').addEventListener('keydown', e => { if (e.key === 'Enter') { onCode($('inp').value); $('inp').value = ''; } });
+$('inp').addEventListener('blur', () => setTimeout(() => { if (!$('scan').hidden && document.activeElement === document.body) $('inp').focus(); }, 150));
+$('kb').onclick = () => { const i = $('inp'); i.inputMode = i.inputMode === 'none' ? 'numeric' : 'none'; i.blur(); i.focus(); };
+
+/* ---------- Kamera (Chrome Android) ---------- */
+let stream, det, camOn = false, lock = 0;
+if ('BarcodeDetector' in window) $('cam').hidden = false;
+$('cam').onclick = async () => {
+  if (camOn) return stopCam();
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    $('video').srcObject = stream; $('video').hidden = false; await $('video').play();
+    det = det || new BarcodeDetector({ formats: ['ean_13', 'code_128'] });
+    camOn = true; $('cam').textContent = 'Tutup kamera'; loop();
+  } catch (e) { $('scanErr').textContent = 'Kamera tidak bisa dibuka. Izinkan akses kamera di browser.'; }
+};
+function stopCam() {
+  camOn = false; $('cam').textContent = 'Kamera'; $('video').hidden = true;
+  stream && stream.getTracks().forEach(t => t.stop());
+}
+async function loop() {
+  if (!camOn) return;
+  if (Date.now() > lock) {
+    try { const r = await det.detect($('video')); if (r.length) { lock = Date.now() + 1500; onCode(r[0].rawValue); } } catch (e) {}
+  }
+  setTimeout(loop, 150);
+}
+
+/* ---------- Keluar ---------- */
+$('exit').onclick = () => {
+  const p = S.queue.length + S.noteQ.length;
+  if (p && !confirm(`${p} data belum terkirim. Keluar sekarang akan menghapusnya. Lanjut keluar?`)) return;
+  stopCam(); S = null; localStorage.removeItem('so');
+  $('scan').hidden = true; $('login').hidden = false; $('kode').value = '';
+};
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+loadNames();
+if (S) showScan();
+</script>
+</body>
+</html>
