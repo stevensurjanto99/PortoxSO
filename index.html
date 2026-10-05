@@ -26,7 +26,10 @@ button:disabled{opacity:.5}
 .pill{font-size:14px;font-weight:600;padding:4px 10px;border-radius:99px;background:var(--okbg);color:var(--ok)}
 .pill.off{background:var(--warnbg);color:var(--warn)}
 .pill.fail{background:var(--badbg);color:var(--bad)}
-#video{width:100%;max-height:36vh;object-fit:cover;border-radius:6px;background:#000;margin-bottom:12px}
+#cv{position:relative;margin-bottom:12px}
+#cv::after{content:'';position:absolute;left:8%;right:8%;top:50%;height:2px;background:rgba(255,60,60,.85);pointer-events:none}
+#video{display:block;width:100%;max-height:36vh;object-fit:cover;border-radius:6px;background:#000}
+#shot{width:100%;margin:0 0 12px;padding:20px;font-size:20px;background:#0f7b3f;border-color:#0f7b3f;color:#fff}
 .tools{display:flex;gap:8px;margin-bottom:12px}
 .tools input{flex:1}
 #last{border-radius:8px;padding:16px;background:var(--card);min-height:140px;border-left:10px solid var(--line)}
@@ -66,7 +69,8 @@ li.bad .t div:first-child{color:var(--bad)}
 
 <main id="scan" hidden>
   <div class="bar"><b id="hdr"></b><span class="pill" id="net">Online</span></div>
-  <video id="video" playsinline muted hidden></video>
+  <div id="cv" hidden><video id="video" playsinline muted></video></div>
+  <button id="shot" hidden>SCAN</button>
   <div class="tools">
     <input id="inp" inputmode="none" autocomplete="off" placeholder="Arahkan scanner ke sini">
     <button id="kb" title="Ketik manual" aria-label="Ketik manual">Ketik</button>
@@ -82,7 +86,7 @@ li.bad .t div:first-child{color:var(--bad)}
 
 <script>
 /* === ISI SATU KALI: URL Web App dari Apps Script (Deploy > Manage deployments) === */
-const API = 'PASTE_URL_WEB_APP_DI_SINI';
+const API = 'https://script.google.com/macros/s/AKfycbzJdX39VXa1AgpQs5_R3q0RnpydSHRpm17IcwU4HRWMW_fjfBR2PuULdVwhOysbJS_7NA/exec';
 
 const $ = id => document.getElementById(id);
 let S = JSON.parse(localStorage.getItem('so') || 'null');   // sesi aktif + antrean offline
@@ -234,29 +238,43 @@ $('inp').addEventListener('keydown', e => { if (e.key === 'Enter') { onCode($('i
 $('inp').addEventListener('blur', () => setTimeout(() => { if (!$('scan').hidden && document.activeElement === document.body) $('inp').focus(); }, 150));
 $('kb').onclick = () => { const i = $('inp'); i.inputMode = i.inputMode === 'none' ? 'numeric' : 'none'; i.blur(); i.focus(); };
 
-/* ---------- Kamera (Chrome Android) ---------- */
-let stream, det, camOn = false, lock = 0;
+/* ---------- Kamera (Chrome Android): satu tekan tombol SCAN = satu barcode ---------- */
+let stream, det, camOn = false, shooting = false;
 if ('BarcodeDetector' in window) $('cam').hidden = false;
 $('cam').onclick = async () => {
   if (camOn) return stopCam();
+  $('scanErr').textContent = '';
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    $('video').srcObject = stream; $('video').hidden = false; await $('video').play();
+    $('video').srcObject = stream; $('cv').hidden = false; $('shot').hidden = false; await $('video').play();
     det = det || new BarcodeDetector({ formats: ['ean_13', 'code_128'] });
-    camOn = true; $('cam').textContent = 'Tutup kamera'; loop();
-  } catch (e) { $('scanErr').textContent = 'Kamera tidak bisa dibuka. Izinkan akses kamera di browser.'; }
+    camOn = true; $('cam').textContent = 'Tutup kamera';
+  } catch (e) { stopCam(); $('scanErr').textContent = 'Kamera tidak bisa dibuka. Izinkan akses kamera di browser.'; }
 };
 function stopCam() {
-  camOn = false; $('cam').textContent = 'Kamera'; $('video').hidden = true;
+  camOn = false; shooting = false; $('cam').textContent = 'Kamera'; $('cv').hidden = true; $('shot').hidden = true;
   stream && stream.getTracks().forEach(t => t.stop());
 }
-async function loop() {
-  if (!camOn) return;
-  if (Date.now() > lock) {
-    try { const r = await det.detect($('video')); if (r.length) { lock = Date.now() + 1500; onCode(r[0].rawValue); } } catch (e) {}
+// Saat tombol ditekan: coba baca selama maksimal 2 detik, ambil barcode yang paling dekat ke tengah, catat SATU kali, lalu berhenti.
+$('shot').onclick = async () => {
+  if (!camOn || shooting) return;
+  shooting = true; $('shot').disabled = true; $('shot').textContent = 'Membaca...'; $('scanErr').textContent = '';
+  const v = $('video'), cx = v.videoWidth / 2, cy = v.videoHeight / 2, end = Date.now() + 2000;
+  let found = null;
+  while (camOn && !found && Date.now() < end) {
+    try {
+      const r = await det.detect(v);
+      if (r.length) {
+        r.sort((a, b) => Math.hypot(a.boundingBox.x + a.boundingBox.width / 2 - cx, a.boundingBox.y + a.boundingBox.height / 2 - cy)
+                       - Math.hypot(b.boundingBox.x + b.boundingBox.width / 2 - cx, b.boundingBox.y + b.boundingBox.height / 2 - cy));
+        found = r[0].rawValue;
+      }
+    } catch (e) {}
+    if (!found) await new Promise(r => setTimeout(r, 120));
   }
-  setTimeout(loop, 150);
-}
+  if (found) onCode(found); else if (camOn) { $('scanErr').textContent = 'Barcode tidak terbaca. Dekatkan, luruskan dengan garis merah, lalu tekan SCAN lagi.'; navigator.vibrate && navigator.vibrate([80, 40, 80]); }
+  setTimeout(() => { shooting = false; $('shot').disabled = false; $('shot').textContent = 'SCAN'; }, 600);   // jeda singkat agar tidak terpencet dobel
+};
 
 /* ---------- Keluar ---------- */
 $('exit').onclick = () => {
