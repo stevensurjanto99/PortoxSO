@@ -43,6 +43,9 @@ li{display:flex;justify-content:space-between;gap:8px;align-items:center;padding
 li .t{min-width:0}li .t div:first-child{font-weight:600}
 li .t div:last-child{font-size:14px;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 li button{padding:6px 10px;font-size:14px}
+li .b{display:flex;gap:6px}
+li.cx .t div:first-child{text-decoration:line-through;color:var(--mute)}
+.undo{width:100%;margin-top:12px;border-color:var(--bad);color:var(--bad)}
 li.bad .t div:first-child{color:var(--bad)}
 .out{margin-top:20px;width:100%;border-color:var(--line);color:var(--mute)}
 @media (prefers-reduced-motion:no-preference){#last{transition:background .15s}}
@@ -70,6 +73,7 @@ li.bad .t div:first-child{color:var(--bad)}
     <button id="cam" hidden>Kamera</button>
   </div>
   <div id="last"><div class="name">Siap scan</div><div class="meta">Scan barcode dus master atau satuan.</div></div>
+  <button class="undo" id="undo">Batalkan scan terakhir</button>
   <div class="count"><div><span>Scan </span><b id="cN">0</b></div><div><span>Total pairs </span><b id="cP">0</b></div></div>
   <ul id="recent"></ul>
   <div class="err" id="scanErr"></div>
@@ -82,6 +86,7 @@ const API = 'https://script.google.com/macros/s/AKfycbzJdX39VXa1AgpQs5_R3q0Rnpyd
 
 const $ = id => document.getElementById(id);
 let S = JSON.parse(localStorage.getItem('so') || 'null');   // sesi aktif + antrean offline
+if (S) S.cancelQ = S.cancelQ || [];
 const save = () => localStorage.setItem('so', JSON.stringify(S));
 
 async function api(body) {
@@ -107,7 +112,7 @@ $('start').onclick = async () => {
   try {
     const r = await api({ action: 'start', nama, kode });
     if (!r.ok) $('loginErr').textContent = r.error;
-    else { S = { nama, kode, pic: r.pic, map: r.map, recent: [], queue: [], noteQ: [], n: 0, pairs: 0 }; save(); showScan(); }
+    else { S = { nama, kode, pic: r.pic, map: r.map, recent: [], queue: [], noteQ: [], cancelQ: [], n: 0, pairs: 0 }; save(); showScan(); }
   } catch (e) { $('loginErr').textContent = 'Tidak ada sinyal. Start SO butuh internet satu kali.'; }
   $('start').disabled = false;
 };
@@ -137,7 +142,7 @@ function onCode(raw) {
   const id = S.nama + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const qty = m ? m[3] : 1;
   S.queue.push({ id, t: new Date().toISOString(), code, note: '' });
-  S.recent.unshift({ id, code, sku: m ? m[0] : 'TIDAK DIKENAL', nama: m ? m[1] : code, size: m ? m[2] : '', qty, jenis: m ? m[4] : 'Tidak Dikenal', note: '', sent: false });
+  S.recent.unshift({ id, code, sku: m ? m[0] : 'TIDAK DIKENAL', nama: m ? m[1] : code, size: m ? m[2] : '', qty, jenis: m ? m[4] : 'Tidak Dikenal', note: '', sent: false, canceled: false });
   S.recent = S.recent.slice(0, 15);
   S.n++; S.pairs += qty;
   save(); beep(!!m); render(); sync();
@@ -151,40 +156,70 @@ function addNote(id) {
   if (q) q.note = it.note; else S.noteQ.push({ id, note: it.note });
   save(); render(); sync();
 }
+const lbl = x => x.jenis === 'Tidak Dikenal' ? 'Tidak dikenal ' + x.code : x.nama + ' ' + x.size;
+function cancelScan(id) {
+  const it = S.recent.find(x => x.id === id);
+  if (!it || it.canceled) return;
+  if (!confirm(`Batalkan scan ini?\n${lbl(it)} (+${it.qty})`)) return;
+  it.canceled = true; S.n--; S.pairs -= it.qty;
+  const q = S.queue.find(x => x.id === id);
+  if (q) q.cancel = true; else S.cancelQ.push({ id });
+  save(); render(); sync();
+}
 function render() {
   if (!S) return;
   const r = S.recent[0], el = $('last');
-  if (r) {
+  if (r && r.canceled) {
+    el.className = '';
+    el.innerHTML = `<div class="name">Scan dibatalkan</div><div class="meta">${lbl(r)}</div>`;
+  } else if (r) {
     el.className = r.jenis === 'Tidak Dikenal' ? 'bad' : 'ok';
     el.innerHTML = r.jenis === 'Tidak Dikenal'
       ? `<div class="name">Barcode tidak dikenal</div><div class="meta">${r.code}<br>Tetap dicatat untuk dicek admin.</div><div class="qty">+${r.qty}<small>pairs</small></div>`
       : `<div class="name">${r.nama} ${r.size}</div><div class="meta">${r.sku}</div><div class="qty">+${r.qty}<small>pairs (${r.jenis})</small></div>`;
   }
   $('cN').textContent = S.n; $('cP').textContent = S.pairs;
-  $('recent').innerHTML = S.recent.map(x => `<li class="${x.jenis === 'Tidak Dikenal' ? 'bad' : ''}"><div class="t"><div>${x.jenis === 'Tidak Dikenal' ? 'Tidak dikenal' : x.nama + ' ' + x.size} +${x.qty}</div><div>${x.note ? 'Catatan: ' + x.note : x.code}${x.sent ? '' : ' (belum terkirim)'}</div></div><button data-id="${x.id}">Catatan</button></li>`).join('');
-  const p = S.queue.length + S.noteQ.length, net = $('net');
+  $('undo').disabled = !S.recent.some(x => !x.canceled);
+  $('recent').innerHTML = S.recent.map(x => `<li class="${x.jenis === 'Tidak Dikenal' ? 'bad' : ''} ${x.canceled ? 'cx' : ''}"><div class="t"><div>${lbl(x)} +${x.qty}</div><div>${x.canceled ? 'Dibatalkan' : x.note ? 'Catatan: ' + x.note : x.code}${x.sent ? '' : ' (belum terkirim)'}</div></div>${x.canceled ? '' : `<div class="b"><button data-n="${x.id}">Catatan</button><button data-c="${x.id}">Batal</button></div>`}</li>`).join('');
+  const p = S.queue.length + S.noteQ.length + S.cancelQ.length, net = $('net');
   net.className = 'pill' + (S.err ? ' fail' : p ? ' off' : '');
   net.textContent = S.err ? S.err : p ? `${p} belum terkirim` : 'Tersimpan semua';
 }
-$('recent').onclick = e => { if (e.target.dataset.id) { addNote(e.target.dataset.id); $('inp').focus(); } };
+$('recent').onclick = e => {
+  const n = e.target.dataset.n, c = e.target.dataset.c;
+  if (n) addNote(n); else if (c) cancelScan(c); else return;
+  $('inp').focus();
+};
+$('undo').onclick = () => { const x = S.recent.find(r => !r.canceled); if (x) cancelScan(x.id); $('inp').focus(); };
 
 /* ---------- Kirim ke spreadsheet (antrean offline) ---------- */
 let syncing = false;
 async function sync() {
-  if (syncing || !S || (!S.queue.length && !S.noteQ.length)) return;
+  if (syncing || !S || (!S.queue.length && !S.noteQ.length && !S.cancelQ.length)) return;
   syncing = true;
   try {
-    const batch = S.queue.slice(0, 50);
+    const batch = S.queue.slice(0, 50).map(q => ({ ...q }));   // salinan: apa yang benar-benar dikirim
     if (batch.length) {
       const r = await api({ action: 'scan', nama: S.nama, kode: S.kode, scans: batch });
       if (!r.ok) { S.err = r.error; throw 0; }
       const done = new Set(batch.map(b => b.id));
       S.queue = S.queue.filter(q => !done.has(q.id));
-      S.recent.forEach(x => { if (done.has(x.id)) x.sent = true; });
+      S.recent.forEach(x => {
+        if (!done.has(x.id)) return;
+        x.sent = true;
+        const b = batch.find(b => b.id === x.id);                // perubahan yang terjadi saat pengiriman berlangsung
+        if (x.note !== b.note) S.noteQ.push({ id: x.id, note: x.note });
+        if (x.canceled && !b.cancel) S.cancelQ.push({ id: x.id });
+      });
     }
     for (const n of S.noteQ.slice()) {
       const r = await api({ action: 'note', kode: S.kode, id: n.id, note: n.note });
       if (r.ok) S.noteQ = S.noteQ.filter(x => x !== n);
+    }
+    for (const c of S.cancelQ.slice()) {
+      const r = await api({ action: 'cancel', nama: S.nama, kode: S.kode, id: c.id });
+      if (!r.ok) { S.err = r.error; throw 0; }
+      S.cancelQ = S.cancelQ.filter(x => x !== c);
     }
     S.err = '';
   } catch (e) { if (!S.err && navigator.onLine === false) S.err = ''; }
@@ -225,7 +260,7 @@ async function loop() {
 
 /* ---------- Keluar ---------- */
 $('exit').onclick = () => {
-  const p = S.queue.length + S.noteQ.length;
+  const p = S.queue.length + S.noteQ.length + S.cancelQ.length;
   if (p && !confirm(`${p} data belum terkirim. Keluar sekarang akan menghapusnya. Lanjut keluar?`)) return;
   stopCam(); S = null; localStorage.removeItem('so');
   $('scan').hidden = true; $('login').hidden = false; $('kode').value = '';
