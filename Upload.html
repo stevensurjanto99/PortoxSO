@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 13px; padding: 12px; color: #222; }
+    label { display: block; margin: 12px 0 4px; font-weight: bold; }
+    select, input[type=file] { width: 100%; box-sizing: border-box; }
+    button { margin-top: 14px; width: 100%; padding: 9px; background: #005646; color: #fff; border: 0; border-radius: 4px; font-size: 14px; cursor: pointer; }
+    button:disabled { background: #aaa; cursor: default; }
+    #info { margin-top: 12px; padding: 8px; background: #f3f3f3; border-radius: 4px; display: none; line-height: 1.5; }
+    #msg { margin-top: 12px; line-height: 1.5; }
+    .err { color: #b00020; } .ok { color: #0b6b2e; }
+  </style>
+</head>
+<body>
+  <b>Upload Stok Existing (Odoo)</b>
+  <label for="kode">Kode SO tujuan</label>
+  <select id="kode"><option value="">Memuat...</option></select>
+
+  <label for="file">File Excel (.xlsx)</label>
+  <input type="file" id="file" accept=".xlsx">
+
+  <div id="info"></div>
+  <button id="btn" disabled onclick="doUpload()">Upload ke SO</button>
+  <div id="msg"></div>
+
+<script>
+  let parsed = null;
+
+  google.script.run.withSuccessHandler(list => {
+    const s = document.getElementById('kode');
+    s.innerHTML = '<option value="">- pilih Kode SO -</option>' +
+      list.map(o => `<option value="${o.kode}">${o.kode}${o.status ? ' (' + o.status + ')' : ''}</option>`).join('');
+  }).withFailureHandler(e => msg('Gagal memuat daftar SO: ' + e.message, true)).getSoList();
+
+  document.getElementById('file').addEventListener('change', ev => {
+    parsed = null; refresh(); document.getElementById('info').style.display = 'none';
+    const f = ev.target.files[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = e => {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
+        // cari kolom lewat header; cadangan: kolom B (variant) dan C (available stock)
+        const head = (rows[0] || []).map(x => String(x).trim().toLowerCase());
+        let iv = head.indexOf('product variant'); if (iv < 0) iv = 1;
+        let iq = head.indexOf('available stock');  if (iq < 0) iq = 2;
+        const out = []; let skipped = 0;
+        rows.slice(1).forEach(r => {
+          const v = String(r[iv] || '').trim();
+          if (!v && r.every(c => c === '')) return;
+          const m = v.match(/\[([^\]]+)\]/);
+          if (!m) { skipped++; return; }
+          const q = Number(String(r[iq]).replace(/,/g, ''));
+          out.push([m[1].trim(), v.replace(/^\s*\[[^\]]+\]\s*/, ''), isNaN(q) ? 0 : q]);
+        });
+        parsed = { fileName: f.name, rows: out };
+        const total = out.reduce((a, r) => a + r[2], 0);
+        const info = document.getElementById('info');
+        info.style.display = 'block';
+        info.innerHTML = `Terbaca: <b>${out.length}</b> SKU<br>Total Available Stock: <b>${total}</b>` +
+          (skipped ? `<br><span class="err">${skipped} baris dilewati (tanpa kode [..])</span>` : '');
+        msg('');
+      } catch (err) { msg('File tidak bisa dibaca: ' + err.message, true); }
+      refresh();
+    };
+    rd.readAsArrayBuffer(f);
+  });
+
+  document.getElementById('kode').addEventListener('change', refresh);
+  function refresh() {
+    document.getElementById('btn').disabled = !(parsed && parsed.rows.length && document.getElementById('kode').value);
+  }
+  function msg(t, err) { const m = document.getElementById('msg'); m.className = err ? 'err' : 'ok'; m.textContent = t; }
+
+  function doUpload() {
+    const kode = document.getElementById('kode').value;
+    if (!confirm('Upload stok ke SO "' + kode + '"?\nData stok existing lama di SO ini akan ditimpa.')) return;
+    const btn = document.getElementById('btn'); btn.disabled = true; msg('Mengupload...');
+    google.script.run
+      .withSuccessHandler(r => { msg('Berhasil: ' + r.skus + ' SKU, total ' + r.total + ' pairs. Buka tab "Banding" di spreadsheet SO.'); refresh(); })
+      .withFailureHandler(e => { msg('Gagal: ' + e.message, true); refresh(); })
+      .uploadStock(kode, parsed);
+  }
+</script>
+</body>
+</html>
