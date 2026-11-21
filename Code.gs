@@ -16,6 +16,7 @@ function onOpen() {
     .addItem('Setup awal (jalankan sekali)', 'setupAdmin')
     .addItem('Buat spreadsheet untuk baris SO yang belum punya link', 'fillMissingLinks')
     .addItem('Upload stok existing (Excel)', 'showUpload')
+    .addItem('Bagikan semua SO (anyone with link)', 'shareAllSo')
     .addItem('Refresh data barcode', 'clearCache')
     .addItem('Cek konfigurasi (diagnosa)', 'diagnose')
     .addToUi();
@@ -90,7 +91,30 @@ function createSoSpreadsheet(kode) {
   rek.getRange('G1').setValue('Total Pairs').setFontWeight('bold');
   rek.getRange('G2').setFormula('=SUM(Log!I2:I)');
   rek.setFrozenRows(1);
+  shareSo(ss.getId());
   return ss.getUrl();
+}
+
+// Bagikan spreadsheet SO: siapa saja yang punya link. Ubah ke Permission.EDIT jika viewer perlu menyentang checkbox di tab Banding.
+const SHARE_PERMISSION = DriveApp.Permission.VIEW;
+
+function shareSo(id) {
+  try {
+    DriveApp.getFileById(id).setSharing(DriveApp.Access.ANYONE_WITH_LINK, SHARE_PERMISSION);
+  } catch (e) {
+    console.error('Gagal set sharing ' + id + ': ' + e);   // mis. dibatasi admin Google Workspace
+  }
+}
+
+// Menu: terapkan sharing ke semua spreadsheet SO yang sudah ada
+function shareAllSo() {
+  const sh = master().getSheetByName('SO');
+  let n = 0;
+  sh.getDataRange().getValues().slice(1).forEach(r => {
+    const m = String(r[3]).match(/\/d\/([a-zA-Z0-9_-]+)/);
+    if (m) { shareSo(m[1]); n++; }
+  });
+  try { SpreadsheetApp.getUi().alert('Sharing diterapkan ke ' + n + ' spreadsheet SO.'); } catch (e) {}
 }
 
 // Highlight oranye untuk baris scan yang barcode-nya tidak dikenal
